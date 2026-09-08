@@ -80,12 +80,36 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # bazzite-docs-ext is a local path dependency declared through
-          # [tool.uv.sources], which pip does not use. Install it explicitly
-          # first, then install the main project without resolving dependencies
-          # a second time.
+
+          # The upstream project uses uv's local-source mapping for this plugin.
+          # pip does not honor [tool.uv.sources], so install the local plugin first.
           python -m pip install ./plugins
+
+          # Install every normal project dependency from pyproject.toml while
+          # excluding only the local plugin that was installed above.
+          python - <<'PY'
+          import re
+          import tomllib
+          from pathlib import Path
+
+          with Path("pyproject.toml").open("rb") as f:
+              project = tomllib.load(f)["project"]
+
+          requirements = []
+          for dependency in project.get("dependencies", []):
+              name = re.split(r"[<>=!~;\[\s]", dependency, maxsplit=1)[0].lower()
+              if name != "bazzite-docs-ext":
+                  requirements.append(dependency)
+
+          Path("/tmp/docs-requirements.txt").write_text(
+              "\n".join(requirements) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          python -m pip install -r /tmp/docs-requirements.txt
           python -m pip install . --no-deps
+          python -m pip check
           mkdocs build --site-dir book
 
       - name: Create ZIM illustration
