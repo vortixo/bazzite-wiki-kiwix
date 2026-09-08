@@ -80,7 +80,12 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install .
+          # bazzite-docs-ext is a local path dependency declared through
+          # [tool.uv.sources], which pip does not use. Install it explicitly
+          # first, then install the main project without resolving dependencies
+          # a second time.
+          python -m pip install ./plugins
+          python -m pip install . --no-deps
           mkdocs build --site-dir book
 
       - name: Create ZIM illustration
