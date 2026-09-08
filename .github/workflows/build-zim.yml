@@ -132,6 +132,7 @@ jobs:
               -w index.html \
               -I illustration.png \
               -l eng \
+              -n bazzite-wiki \
               -t "Bazzite Documentation" \
               -d "Bazzite Documentation offline archive" \
               -L "Offline archive of the Bazzite documentation, built automatically from the official documentation repository." \
