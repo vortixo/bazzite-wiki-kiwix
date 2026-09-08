@@ -1,0 +1,188 @@
+name: Build Bazzite Kiwix ZIM
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bazzite-zim
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: ublue-os/docs.bazzite.gg
+  RELEASE_TAG: latest
+  ZIM_NAME: bazzite-wiki.zim
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout builder repository
+        uses: actions/checkout@v6
+
+      - name: Fetch upstream Bazzite documentation
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://github.com/${UPSTREAM_REPO}.git" upstream
+          cd upstream
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether an update is needed
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "push" ]]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! NOTES="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null)"; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -q "^Upstream commit: ${UPSTREAM_SHA}$" <<< "$NOTES"; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.changed.outputs.needed == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build Bazzite documentation
+        if: steps.changed.outputs.needed == 'true'
+        working-directory: upstream
+        env:
+          GITHUB_REPOSITORY: ublue-os/docs.bazzite.gg
+          GITHUB_REF_NAME: main
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install .
+          mkdocs build --site-dir book
+
+      - name: Create ZIM illustration
+        if: steps.changed.outputs.needed == 'true'
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import struct, zlib
+          w = h = 48
+          raw = bytearray()
+          for y in range(h):
+              raw.append(0)
+              for x in range(w):
+                  # Simple purple Bazzite-style square with a white center mark.
+                  inside = 10 <= x < 38 and 10 <= y < 38
+                  white = 18 <= x < 30 and 18 <= y < 30
+                  raw.extend((255,255,255) if white else ((92,64,160) if inside else (255,255,255)))
+          def chunk(kind, data):
+              return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+          png = b'\x89PNG\r\n\x1a\n'
+          png += chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+          png += chunk(b'IDAT', zlib.compress(bytes(raw), 9))
+          png += chunk(b'IEND', b'')
+          open('book/illustration.png', 'wb').write(png)
+          PY
+
+      - name: Build OpenZIM archive
+        if: steps.changed.outputs.needed == 'true'
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD/book:/data" \
+            ghcr.io/openzim/zim-tools:latest \
+            zimwriterfs \
+              -w index.html \
+              -I illustration.png \
+              -l eng \
+              -t "Bazzite Documentation" \
+              -d "Bazzite Documentation offline archive" \
+              -L "Offline archive of the Bazzite documentation, built automatically from the official documentation repository." \
+              -c "Bazzite Project" \
+              -p "Vortixo" \
+              /data /data/${ZIM_NAME}
+
+      - name: Validate ZIM archive
+        if: steps.changed.outputs.needed == 'true'
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD/book:/data" \
+            ghcr.io/openzim/zim-tools:latest \
+            zimcheck /data/${ZIM_NAME}
+          test -s "book/${ZIM_NAME}"
+
+      - name: Upload workflow artifact
+        if: steps.changed.outputs.needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazzite-wiki-zim
+          path: upstream/book/bazzite-wiki.zim
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish rolling GitHub Release
+        if: steps.changed.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+          UPSTREAM_SHORT_SHA: ${{ steps.upstream.outputs.short_sha }}
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Automatically generated Bazzite Documentation Kiwix archive.
+
+          Upstream commit: ${UPSTREAM_SHA}
+          Upstream repository: https://github.com/${UPSTREAM_REPO}
+          Builder repository: https://github.com/${GITHUB_REPOSITORY}
+
+          This is a rolling release. The asset is replaced whenever the upstream documentation changes.
+          EOF
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Bazzite Wiki (latest)" \
+              --notes-file release-notes.md \
+              --latest
+            gh release upload "$RELEASE_TAG" "book/${ZIM_NAME}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" "book/${ZIM_NAME}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target main \
+              --title "Bazzite Wiki (latest)" \
+              --notes-file release-notes.md \
+              --latest
+          fi
