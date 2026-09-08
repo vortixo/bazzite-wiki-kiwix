@@ -79,7 +79,9 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install .
+          python -m pip install ./plugins
+          python -m pip install . --no-deps
+          python -m pip install "mkdocs>=1.6.1" "mkdocs-material[imaging]>=9.5.42" "mkdocs-glightbox>=0.4.0" "mdx_better_lists>=1.1.0" "bs4>=0.0.2" "requests>=2.32.3"
           mkdocs build --site-dir book
 
       - name: Create ZIM illustration
@@ -95,7 +97,6 @@ jobs:
           for y in range(h):
               raw.append(0)
               for x in range(w):
-                  # Simple purple Bazzite-style square with a white center mark.
                   inside = 10 <= x < 38 and 10 <= y < 38
                   white = 18 <= x < 30 and 18 <= y < 30
                   raw.extend((255,255,255) if white else ((92,64,160) if inside else (255,255,255)))
