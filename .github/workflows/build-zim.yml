@@ -160,7 +160,6 @@ jobs:
               -M \
               -F \
               -P \
-              -U \
               /work/${ZIM_NAME}
           test -s "${ZIM_NAME}"
 
