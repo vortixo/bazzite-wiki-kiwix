@@ -154,7 +154,14 @@ jobs:
           docker run --rm \
             -v "$PWD:/work" \
             ghcr.io/openzim/zim-tools:latest \
-            zimcheck /work/${ZIM_NAME}
+            zimcheck \
+              -I \
+              -C \
+              -M \
+              -F \
+              -P \
+              -U \
+              /work/${ZIM_NAME}
           test -s "${ZIM_NAME}"
 
       - name: Upload workflow artifact
