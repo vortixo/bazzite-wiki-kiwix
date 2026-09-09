@@ -97,6 +97,17 @@ jobs:
           python -m pip install -r /tmp/docs-requirements.txt
           python -m pip install . --no-deps
           python -m pip check
+
+          # ZIM readers address articles as archive paths, not web directories.
+          # MkDocs' default directory URLs therefore leave links such as
+          # General/FAQ/ pointing at a path for which the ZIM has no item.
+          # Emit .html URLs so every generated link maps to an actual ZIM item.
+          if grep -q '^use_directory_urls:' mkdocs.yml; then
+            sed -i 's/^use_directory_urls:.*/use_directory_urls: false/' mkdocs.yml
+          else
+            printf '\nuse_directory_urls: false\n' >> mkdocs.yml
+          fi
+
           mkdocs build --site-dir book
 
       - name: Create ZIM illustration
@@ -151,6 +162,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          html_count="$(find book -type f \( -name '*.html' -o -name '*.htm' \) | wc -l)"
+          echo "Generated HTML pages: ${html_count}"
+          test "${html_count}" -ge 20
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            ghcr.io/openzim/zim-tools:latest \
+            sh -c 'zimdump list /work/'"${ZIM_NAME}"' | grep -E "(^|/)FAQ\\.html$"'
+
           docker run --rm \
             -v "$PWD:/work" \
             ghcr.io/openzim/zim-tools:latest \
